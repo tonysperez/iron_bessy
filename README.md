@@ -118,16 +118,15 @@ Extend the full pipeline (Packer → OpenTofu → Ansible) for Windows Server 20
 - **OPA:** One custom Rego policy enforcing environment-specific constraints across the pipeline.
 - **Ansible:** CIS hardening via [ansible-lockdown](https://github.com/ansible-lockdown).
 
+### Step ? - Use VSCode Dev Container
+
+For easy portability, use a local docker container as the runtime. Handles all dependendies cleanly, especially for Windows machines.
+
 ## Security & Production Deployment
 
 ### Homelab Configuration (Current)
 
-This project is designed for **homelab environments with self-signed TLS certificates:**
-
-- `insecure_skip_tls_verify = true` in Packer
-- `curl -k` (skip TLS verification) in shell scripts
-- Credentials stored on disk in `.credentials` file
-- Passwordless sudo (`NOPASSWD:ALL`) in templates
+This project is currently designed for home-lab environments.
 
 ### Production Hardening
 
@@ -139,9 +138,8 @@ Before deploying to production, address:
    - Install proper CA certificates in your environment
 
 2. **Credentials Management**
-   - Use HashiCorp Vault or environment-only secrets
+   - Use secrets manager
    - Rotate API tokens regularly
-   - Never commit `.credentials` or `secrets.pkrvars.hcl` to VCS
 
 3. **Template Security**
    - Remove `NOPASSWD:ALL` sudo grant in `packer/ubuntu-server-2404-core/cloudinit/user-data.pkrtpl` line 43
