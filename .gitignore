@@ -1,0 +1,19 @@
+# Console parameters cache. Can contain sensitive information
+console/.config
+
+# Console manifest. Not sensitive, but should be re-generated for new installs
+console/pipeline/templates.json
+
+# Terraform/OpenTofu state files. Contains sensitive information and potentially secrets
+.terraform
+*.tfstate*
+
+# Hypervisor secrets
+console/.credentials
+
+# Image-specific secrets file.
+*secrets.pkrvars.hcl
+
+# Junk
+.vscode/
+.idea/
