@@ -39,6 +39,21 @@ autoinstall:
     package_upgrade: true
     timezone: UTC
     disable_root: true
+    users:
+      - name: ${ansible_username}
+        gecos: Ansible Service Account
+        shell: /bin/bash
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: true
+        ssh_authorized_keys:
+          - ${ansible_ssh_key}
+      - name: ${breakglass_username}
+        gecos: Break-glass Emergency Account
+        shell: /bin/bash
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: true
+        ssh_authorized_keys:
+          - ${breakglass_ssh_key}
   late-commands:
     # Grant passwordless sudo to build user (Packer needs this).
     # Post-build, this account is locked and should be removed by downstream provisioning.

@@ -1,13 +1,13 @@
 # iron_bessy Console
 
-Interactive pipeline console (referred to elsewhere in this repo as just *the console*) for building Proxmox VM templates with Packer. Handles credential management, dynamic resource discovery, configuration caching, and build orchestration through a menu-driven interface.
+Interactive pipeline console (referred to elsewhere in this repo as just *the console*) for building Proxmox VM templates with Packer and provisioning VMs from those templates with OpenTofu. Handles credential management, dynamic resource discovery, cluster-scoped configuration caching, workspace selection, and build/apply orchestration through a menu-driven interface.
 
 ## Quick Start
 
 ```bash
 # First run
-cp console/.credentials.example console/.credentials
-# Edit .credentials with your Proxmox API token(s)
+cp console/credentials.conf.example console/credentials.conf
+# Edit credentials.conf with your Proxmox API token(s)
 
 ./console/iron_bessy.sh
 ```
@@ -19,18 +19,20 @@ On subsequent runs, all prior selections (node, storage pools, bridges, etc.) ar
 ```
 console/
 ├── iron_bessy.sh              # Entrypoint and main menu
-├── .credentials.example       # Example for Proxmox API credentials
-├── .config.example            # Example of the generated config cache
+├── credentials.conf.example       # Example for Proxmox API credentials
+├── console.cache.example            # Example of the generated config cache
 ├── shared/
 │   ├── output.sh              # Logging, color, and prompt helpers
 │   ├── config.sh              # Cluster-scoped configuration cache
 │   ├── proxmox.sh             # Proxmox API helpers and selectors
-│   └── packer.sh              # Packer workflow and build orchestration
+│   ├── packer.sh              # Packer workflow and build orchestration
+│   └── tofu.sh                # OpenTofu workflow and provisioning orchestration
 └── pipeline/
-    └── templates.json         # Build artifact manifest (updated after each build)
+    ├── templates.json         # Packer build manifest (updated after each build)
+    └── inventory.<cluster>.json  # OpenTofu VM inventory per cluster (updated after each apply/destroy)
 ```
 
-`.credentials` and `.config` are gitignored.
+`credentials.conf` and `console.cache` are gitignored.
 
 ## Architecture
 
@@ -40,13 +42,18 @@ flowchart TD
     A -->|sources| C[config.sh]
     A -->|sources| D[proxmox.sh]
     A -->|sources| E[packer.sh]
+    A -->|sources| T[tofu.sh]
 
     E -->|calls| D
-    D -->|reads/writes| F[.config]
-    D -->|reads| G[.credentials]
+    T -->|calls| D
+    D -->|reads/writes| F[console.cache]
+    D -->|reads| G[credentials.conf]
     D -->|curl| H[Proxmox API]
     E -->|invokes| I[packer binary]
     E -->|writes| J[pipeline/templates.json]
+    T -->|reads| J
+    T -->|invokes| K[tofu binary]
+    T -->|writes| L[pipeline/inventory.&lt;cluster&gt;.json]
 ```
 
 ## Usage
@@ -87,9 +94,9 @@ flowchart TD
     N -->|failure| P[Report exit code]
 ```
 
-Each step caches its result to `.config` so it is skipped on the next run unless `--no-cache` is passed or the cached value is no longer valid (e.g., a storage pool was removed from the node).
+Each step caches its result to `console.cache` so it is skipped on the next run unless `--no-cache` is passed or the cached value is no longer valid (e.g., a storage pool was removed from the node).
 
-## Configuration Cache (`.config`)
+## Configuration Cache (`console.cache`)
 
 The cache file uses an INI format scoped by cluster. This means two clusters can have different nodes, storage pools, bridges, and VLANs without colliding.
 
@@ -97,13 +104,13 @@ Bridge and VLAN are keyed per image (`VM_NETWORK_BRIDGE_<image>`, `VM_NETWORK_VL
 
 `PROXMOX_CLUSTER` is stored outside any section so it is readable before a cluster is selected — it is used only to hint "last used" in the menu.
 
-## Credentials (`.credentials`)
+## Credentials (`credentials.conf`)
 
 Proxmox API credentials for one or more clusters, in INI format.
 
 Section headers are cluster names shown in the selection menu. They are arbitrary labels, they don't have to match the actual cluster name (for flexibility when maintaining multiple environments). If only one cluster is defined, it is selected automatically.
 
-Credentials are loaded into `PKR_VAR_proxmox_username` and `PKR_VAR_proxmox_token` environment variables, which Packer reads at higher precedence than any variable file. They are never written to disk beyond this file and never appear on the `packer` command line.
+Each tool has its own credential keys in `credentials.conf`. Packer credentials (`packer_username`, `packer_token`) are loaded into `PKR_VAR_proxmox_username` and `PKR_VAR_proxmox_token`. OpenTofu credentials (`tofu_username`, `tofu_token`) are loaded into `TF_VAR_proxmox_username` and `TF_VAR_proxmox_token` by `_tofu_load_credentials` in `tofu.sh`. Credentials are never written to disk beyond `credentials.conf` and never appear on any tool's command line.
 
 ## Pipeline Manifest (`pipeline/templates.json`)
 
@@ -119,9 +126,31 @@ This file is automatically generated on first build. After every successful buil
 }
 ```
 
-This file is committed to the repository and is intended to be consumed by Terraform/OpenTofu:
+This file is gitignored and is intended to be consumed by OpenTofu (see [opentofu/README.md](../opentofu/README.md)).
 
 Multiple images accumulate as separate keys. Each build updates only its own entry.
+
+## Pipeline Inventory (`pipeline/inventory.<cluster>.json`)
+
+Written by the OpenTofu workflow after every successful apply or destroy. One file per cluster (filename includes the active cluster, matching the per-cluster workspace layout under `opentofu/terraform.tfstate.d/<cluster>/`) so applying against `home-lab` never overwrites a `work` inventory. Each VM provisioned by `tofu apply` appears as a top-level key with the metadata downstream tooling (Ansible, etc.) needs:
+
+```json
+{
+  "dshield": {
+    "vm_id": 100,
+    "node": "pve",
+    "image": "ubuntu-server-2404-core",
+    "ssh_user": "ops",
+    "ip_address": "10.0.0.69",
+    "vlan": 900,
+    "tags": ["opentofu"],
+    "cluster": "home-lab",
+    "applied_at": "2026-04-20T15:30:00Z"
+  }
+}
+```
+
+The console runs `tofu output -json vms`, then wraps each entry with the active cluster and a UTC timestamp. After a destroy, the file is rewritten with an empty map. Gitignored — re-generated on first apply for new installs.
 
 ## Module Reference
 
@@ -145,7 +174,7 @@ Logging and prompt utilities used by all other modules.
 
 ### `config.sh`
 
-Reads and writes the `.config` cache. All access is through two functions:
+Reads and writes the `console.cache` cache. All access is through two functions:
 
 ```
 config_get  <key>         → prints value or empty string
@@ -164,7 +193,7 @@ Proxmox API interaction. All functions use `curl -sf -k` with a `PVEAPIToken` au
 
 | Function | Description |
 |---|---|
-| `proxmox_load_credentials` | Reads `.credentials`, selects cluster, exports `PKR_VAR_*` env vars |
+| `proxmox_load_credentials` | Reads `credentials.conf`, selects cluster, exports `PKR_VAR_proxmox_username` and `PKR_VAR_proxmox_token` for Packer |
 
 **Interactive selectors** - each queries the API, checks the cache, and prompts only when needed:
 
@@ -207,18 +236,40 @@ Build orchestration. Contains `action_build_template` (the full workflow) and su
 
 | Function | Description |
 |---|---|
-| `packer_list_images` | Finds all `*.pkr.hcl` files in `packer/`, excluding `global_*` |
+| `packer_list_images` | Finds image subdirectories under `packer/` that contain a matching `<name>.pkr.hcl` |
 | `packer_get_variable <image> <var>` | Reads variable from image secrets file, falls back to HCL default |
 | `packer_get_vm_name <image>` | Extracts `vm_name` literal from the image's source block |
 | `packer_select_vlan <image>` | Prompts for VLAN (1–4094), caches per image as `VM_NETWORK_VLAN_<image>` |
 | `packer_only_filter <image>` | Builds the `--only=*.<type>.<name>` filter string from the source block |
 | `packer_write_pipeline_manifest <image> <vm_name> <vmid>` | Updates `pipeline/templates.json` |
 
+### `tofu.sh`
+
+OpenTofu provisioning orchestration. Contains `action_provision_infrastructure` (the full workflow) and supporting helpers.
+
+| Function | Description |
+|---|---|
+| `_tofu_read_manifest` | Reads `pipeline/templates.json`, returns a compact JSON map of image name to VMID |
+| `_tofu_load_credentials` | Reads `tofu_username`/`tofu_token` from `credentials.conf`, exports `TF_VAR_proxmox_username` and `TF_VAR_proxmox_token` |
+| `_tofu_prompt_default` | Prompts for a cluster-scoped default value, caches in `console.cache` (uses `"None"` sentinel for explicit skip) |
+| `_tofu_prompt_network_defaults` | Prompts for `vm_default_vlan`, `vm_default_gateway`, `vm_default_dns_servers`, `vm_default_dns_domain`; appends to `_TOFU_VAR_ARGS` |
+| `_tofu_init` | Runs `tofu init` (idempotent) |
+| `_tofu_select_workspace` | Selects (or creates) the OpenTofu workspace named `<cluster>-<group>`, isolating state per (cluster, group) pair |
+| `_tofu_plan` | Runs `tofu plan` for review |
+| `_tofu_plan_to_file` | Runs `tofu plan -out=<tmpfile>` for use by apply |
+| `_tofu_apply` | Plans to file, prompts for confirmation, then applies; writes `inventory.<cluster>.json` on success |
+| `_tofu_destroy` | Double-confirms via typed "destroy", plans -destroy, confirms again, applies; writes `inventory.<cluster>.json` on success |
+| `_tofu_write_inventory` | Reads the `vms` tofu output, wraps each entry with `cluster` + `applied_at`, writes `pipeline/inventory.<cluster>.json` |
+
+Sensitive variables (`proxmox_username`, `proxmox_token`) are exported as `TF_VAR_*` environment variables and never passed on the command line.
+
+State is isolated per cluster via OpenTofu workspaces. `_tofu_select_workspace` runs after `_tofu_init` and before any plan/apply, so applying against `home-lab` and `work` never collides — each cluster gets its own state under `opentofu/terraform.tfstate.d/<cluster>/`.
+
 ## Security Notes
 
-- **Credentials on disk:** `.credentials` is gitignored. It is the only place Proxmox tokens are stored.
+- **Credentials on disk:** `credentials.conf` is gitignored. It is the only place Proxmox tokens are stored.
 - **Credentials in memory:** Loaded into env vars (`PKR_VAR_proxmox_username`, `PKR_VAR_proxmox_token`) for the duration of the shell session. Not passed on the command line.
-- **Template credentials:** `template_username` / `template_password` live in `secrets.pkrvars.hcl` (gitignored) and are passed to Packer via `-var-file`. The password is dynamically bcrypt-hashed inside the VM by Packer's `bcrypt()` function before being written to cloud-init.
+- **Template credentials:** `template_username` / `template_password` live in `global_secrets.pkrvars.hcl` (gitignored) and are passed to Packer via `-var-file`. The password is dynamically bcrypt-hashed inside the VM by Packer's `bcrypt()` function before being written to cloud-init.
 - **TLS:** Proxmox typically uses self-signed certificates. `curl -k` and `insecure_skip_tls_verify = true` are set intentionally for homelab use. This should be removed for production environments.
 - **Build user:** Created as `template_username` during build. Packer locks this account after build (cannot delete while connected). Downstream provisioning should remove it entirely.
 
@@ -226,11 +277,11 @@ Build orchestration. Contains `action_build_template` (the full workflow) and su
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| "Could not read credentials for cluster" | `.credentials` file missing or malformed | Create from `.credentials.example`; verify `[section-name]`, `username`, `token` are present |
+| "Could not read credentials for cluster" | `credentials.conf` file missing or malformed | Create from `credentials.conf.example`; verify `[section-name]`, `username`, `token` are present |
 | "Failed to reach Proxmox API" | Wrong Proxmox URL or API unreachable | Verify `PROXMOX_URL` is correct and Proxmox is online; check firewall |
 | "VMID in use by different name" | VMID exists but belongs to a different VM | Resolve manually in Proxmox UI; delete the conflicting VM or use a different VMID |
 | "ISO not found on node" | ISO does not exist in specified storage pool | Upload Ubuntu ISO to Proxmox storage; verify path in `vm_boot_iso` variable |
 | "No bridges found on node" | Node has no network bridges configured | Configure network bridges in Proxmox; typically named `vmbr0` |
 | "Validation failed" | Packer config error or variable substitution failed | Check console output for specific error; use `--no-cache` to re-prompt all values |
 | "Build exited with code X" | Packer build failed (SSH timeout, package install, provisioner error) | Check Proxmox console for build VM; SSH timeout usually means cloud-init didn't finish |
-| "Stale cached values" | Proxmox infrastructure changed (pool removed, node renamed) | Run with `--no-cache` to re-prompt; manually delete stale entries in `.config` |
+| "Stale cached values" | Proxmox infrastructure changed (pool removed, node renamed) | Run with `--no-cache` to re-prompt; manually delete stale entries in `console.cache` |

@@ -8,12 +8,46 @@
 # 4. Runs packer init/validate/build
 # 5. Updates the build manifest (pipeline/templates.json)
 
+# Load pipeline account credentials from the [sys:packer] section of credentials.conf
+# and export them as PKR_VAR_* environment variables. Keeps sensitive values
+# off the command line and out of any file visible to packer build output.
+_packer_load_image_credentials() {
+  local template_username template_password ansible_username ansible_ssh_key breakglass_username breakglass_ssh_key
+  template_username="$(_credentials_get "sys:packer" "template_username")"
+  template_password="$(_credentials_get "sys:packer" "template_password")"
+  ansible_username="$(_credentials_get "sys:packer" "ansible_username")"
+  ansible_ssh_key="$(_credentials_get "sys:packer" "ansible_ssh_key")"
+  breakglass_username="$(_credentials_get "sys:packer" "breakglass_username")"
+  breakglass_ssh_key="$(_credentials_get "sys:packer" "breakglass_ssh_key")"
+
+  [[ -z "$template_username"  ]] && die "template_username not set in [packer] section of credentials.conf."
+  [[ -z "$template_password"  ]] && die "template_password not set in [packer] section of credentials.conf."
+  [[ -z "$ansible_ssh_key"    ]] && die "ansible_ssh_key not set in [packer] section of credentials.conf."
+  [[ -z "$breakglass_ssh_key" ]] && die "breakglass_ssh_key not set in [packer] section of credentials.conf."
+
+  export PKR_VAR_template_username="$template_username"
+  export PKR_VAR_template_password="$template_password"
+  export PKR_VAR_ansible_username="${ansible_username:-ansible}"
+  export PKR_VAR_ansible_ssh_key="$ansible_ssh_key"
+  export PKR_VAR_breakglass_username="${breakglass_username:-breakglass}"
+  export PKR_VAR_breakglass_ssh_key="$breakglass_ssh_key"
+
+  success "Loaded image credentials from credentials.conf"
+  echo ""
+}
+
+# Parse a variable value from a .pkrvars.hcl file.
+_pkrvars_get() {
+  local file="$1" key="$2"
+  grep "^${key}[[:space:]]*=" "$file" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' | head -1
+}
+
 # Read a variable's value for an image: checks image secrets file, then falls
 # back to the default in the image's variable declaration file.
 packer_get_variable() {
   local image="$1" varname="$2"
   local val
-  val="$(_pkrvars_get "${PACKER_DIR}/${image}/secrets.pkrvars.hcl" "$varname")"
+  val="$(_pkrvars_get "${PACKER_DIR}/global_secrets.pkrvars.hcl" "$varname")"
   [[ -n "$val" ]] && echo "$val" && return
   awk -v name="$varname" '
     $0 ~ "variable[[:space:]]+\"" name "\"" { in_block=1; next }
@@ -24,10 +58,10 @@ packer_get_variable() {
       print; exit
     }
     in_block && /^}/ { exit }
-  ' "${PACKER_DIR}/${image}.pkr.hcl" 2>/dev/null
+  ' "${PACKER_DIR}/${image}/${image}.pkr.hcl" 2>/dev/null
 }
 
-# Prompt for the network VLAN for an image, cached per-image in .config.
+# Prompt for the network VLAN for an image, cached per-image in console.cache.
 packer_select_vlan() {
   local image="$1"
   local config_key="VM_NETWORK_VLAN_${image}"
@@ -58,7 +92,7 @@ packer_select_vlan() {
 # Extract the vm_name literal from the source block of a build config.
 packer_get_vm_name() {
   local image="$1"
-  grep -m1 'vm_name' "${PACKER_DIR}/${image}.pkr.hcl" 2>/dev/null \
+  grep -m1 'vm_name' "${PACKER_DIR}/${image}/${image}.pkr.hcl" 2>/dev/null \
     | sed 's/.*= *"\(.*\)"/\1/'
 }
 
@@ -90,11 +124,14 @@ packer_write_pipeline_manifest() {
   echo ""
 }
 
-# Discover build configs: .pkr.hcl files that are not variable or global files.
+# Discover build configs: subdirectories that contain a matching <name>.pkr.hcl file.
 packer_list_images() {
-  find "$PACKER_DIR" -maxdepth 1 -name "*.pkr.hcl" \
-    ! -name "global_*" \
-    -exec basename {} .pkr.hcl \; | sort
+  find "$PACKER_DIR" -mindepth 1 -maxdepth 1 -type d \
+    | while IFS= read -r dir; do
+        local image
+        image="$(basename "$dir")"
+        [[ -f "${dir}/${image}.pkr.hcl" ]] && echo "$image"
+      done | sort
 }
 
 # Parse the --only glob from a build config file.
@@ -102,7 +139,7 @@ packer_list_images() {
 # We use a glob for <build-name> to avoid hardcoding it.
 packer_only_filter() {
   local image="$1"
-  local hcl="${PACKER_DIR}/${image}.pkr.hcl"
+  local hcl="${PACKER_DIR}/${image}/${image}.pkr.hcl"
 
   local type name
   type=$(grep -m1 '^source "' "$hcl" | awk -F'"' '{print $2}')
@@ -131,7 +168,8 @@ action_build_template() {
   echo ""
 
   # ── Pre-flight setup ────────────────────────────────────────────────────────
-  proxmox_load_credentials    # must be first — sets PROXMOX_CLUSTER to scope .config
+  proxmox_load_credentials    # must be first — sets PROXMOX_CLUSTER to scope console.cache
+  _packer_load_image_credentials
   packer_select_vlan "$image"
   proxmox_prompt_url
   proxmox_select_node
@@ -175,10 +213,6 @@ action_build_template() {
     --only="${source}"
   )
 
-  # Pass image-specific secrets file if present.
-  local image_secrets="${PACKER_DIR}/${image}/secrets.pkrvars.hcl"
-  [[ -f "$image_secrets" ]] && packer_args+=(-var-file="${image_secrets}")
-
   # ── Confirm ─────────────────────────────────────────────────────────────────
   info "Build parameters:"
   echo -e "      Image:       ${BOLD}${image}${RESET}"
@@ -197,10 +231,19 @@ action_build_template() {
   confirm="$(prompt "Proceed with build? [y/N]")"
   [[ "${confirm,,}" != "y" ]] && { echo ""; info "Aborted."; echo ""; return 0; }
 
+  local image_dir="${PACKER_DIR}/${image}"
+
+  # Ensure global_variables.pkr.hcl is visible from the image directory so
+  # packer can be pointed at the image dir as a single self-contained template.
+  local global_link="${image_dir}/global_variables.pkr.hcl"
+  if [[ ! -e "$global_link" ]]; then
+    ln -s "../global_variables.pkr.hcl" "$global_link"
+  fi
+
   # ── Init (idempotent — fetches required plugins) ────────────────────────────
   header "Initializing"
   info "Running packer init..."
-  if ! (cd "$PACKER_DIR" && packer init .); then
+  if ! (cd "$image_dir" && packer init .); then
     die "packer init failed — could not fetch required plugins."
   fi
   success "Plugins ready."
@@ -209,7 +252,7 @@ action_build_template() {
   # ── Validate ────────────────────────────────────────────────────────────────
   header "Validating"
   info "Running packer validate..."
-  if ! (cd "$PACKER_DIR" && packer validate "${packer_args[@]}" .); then
+  if ! (cd "$image_dir" && packer validate "${packer_args[@]}" .); then
     die "Validation failed — fix the errors above before building."
   fi
   success "Validation passed."
@@ -221,7 +264,7 @@ action_build_template() {
   echo ""
 
   local exit_code=0
-  (cd "$PACKER_DIR" && packer build "${packer_args[@]}" .) || exit_code=$?
+  (cd "$image_dir" && packer build "${packer_args[@]}" .) || exit_code=$?
 
   echo ""
   if [[ $exit_code -eq 0 ]]; then

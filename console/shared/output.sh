@@ -32,3 +32,14 @@ prompt() {
   read -r val
   echo "${val:-$default}"
 }
+
+# Prompt without echoing the typed value. Used for secrets entered at runtime
+# (bootstrap admin tokens) that should never appear in the terminal scrollback.
+prompt_secret() {
+  local msg="$1"
+  echo -ne "  ${BOLD}${msg}${RESET}: " >&2
+  local val
+  read -rs val
+  echo "" >&2
+  echo "$val"
+}

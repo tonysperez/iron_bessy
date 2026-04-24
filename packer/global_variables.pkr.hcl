@@ -49,7 +49,7 @@ variable "vm_network_vlan" {
   type        = number
 }
 
-# Template Credentials
+# Template Credentials (Packer build user)
 variable "template_username" {
   description = "Username Packer uses to remote into the build VM. Must match the identity in cloudinit/user-data."
   type        = string
@@ -57,6 +57,29 @@ variable "template_username" {
 
 variable "template_password" {
   description = "Password Packer uses to remote into the build VM."
+  type        = string
+  sensitive   = true
+}
+
+# Pipeline Accounts (baked into every image at build time)
+variable "ansible_username" {
+  description = "Username for the Ansible service account."
+  type        = string
+}
+
+variable "ansible_ssh_key" {
+  description = "SSH public key injected into the Ansible service account at build time."
+  type        = string
+  sensitive   = true
+}
+
+variable "breakglass_username" {
+  description = "Username for the break-glass emergency account."
+  type        = string
+}
+
+variable "breakglass_ssh_key" {
+  description = "SSH public key injected into the break-glass emergency account at build time."
   type        = string
   sensitive   = true
 }

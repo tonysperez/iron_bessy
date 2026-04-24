@@ -15,7 +15,7 @@
 #   PROXMOX_NODE=pve-work
 #   PROXMOX_URL=https://...
 
-CONFIG_FILE="${CONSOLE_DIR}/.config"
+CONFIG_FILE="${CONSOLE_DIR}/console.cache"
 
 # Returns true if a key should always be stored at the global (unsectioned) level.
 _config_is_global() { [[ "$1" == "PROXMOX_CLUSTER" ]]; }

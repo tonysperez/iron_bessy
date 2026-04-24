@@ -1,15 +1,19 @@
 # Console parameters cache. Can contain sensitive information
-console/.config
+console/console.cache
 
-# Console manifest. Not sensitive, but should be re-generated for new installs
-console/pipeline/templates.json
+# Console manifests. Not sensitive, but should be re-generated for new installs
+console/pipeline/*
 
-# Terraform/OpenTofu state files. Contains sensitive information and potentially secrets
+# OpenTofu config files. Can contain sensitive information
+opentofu/clusters/*
+!opentofu/clusters/README.md
+
+# OpenTofu state files. Contains sensitive information and potentially secrets
 .terraform
 *.tfstate*
 
-# Hypervisor secrets
-console/.credentials
+# Secrets
+console/credentials.conf
 
 # Image-specific secrets file.
 *secrets.pkrvars.hcl

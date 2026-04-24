@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Proxmox API interaction: credentials, resource queries, and interactive selectors.
 # All API calls use curl with TLS verification disabled (intentional for homelab).
-# Functions export variables (e.g., PROXMOX_URL) and cache values to .config.
+# Functions export variables (e.g., PROXMOX_URL) and cache values to console.cache.
 
-# Parse a variable value from a .pkrvars.hcl file.
-_pkrvars_get() {
-  local file="$1" key="$2"
-  grep "^${key}[[:space:]]*=" "$file" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' | head -1
-}
-
-# Parse section names from the .credentials INI file.
+# Parse cluster section names from the credentials.conf INI file.
+# Sections prefixed with sys: are reserved for console-internal configuration
+# (e.g. [sys:packer]) and are excluded from the cluster list.
 _credentials_list_clusters() {
-  grep '^\[' "${CONSOLE_DIR}/.credentials" 2>/dev/null | tr -d '[]'
+  grep '^\[' "${CONSOLE_DIR}/credentials.conf" 2>/dev/null \
+    | grep -v '^\[sys:' \
+    | tr -d '[]'
 }
 
-# Read a key's value from a named section of the .credentials INI file.
+# Read a key's value from a named section of the credentials.conf INI file.
 # Inline comments (` #...` after whitespace) are stripped from the value.
 #
 # This parses a simple INI format:
 #   [section-name]
+#   key = value        # unquoted
+#   key = "value"      # HCL-style quoted strings are also accepted
 #   key = value  # inline comment
 #
 # awk logic:
@@ -26,7 +26,8 @@ _credentials_list_clusters() {
 #   2. When in the target section, find the key= line
 #   3. Extract value after = and trim leading/trailing whitespace
 #   4. Remove inline comments (everything after whitespace + #)
-#   5. Exit after finding the first match
+#   5. Strip surrounding double quotes (tolerates HCL-style values)
+#   6. Exit after finding the first match
 _credentials_get() {
   local cluster="$1" key="$2"
   awk -v sec="[${cluster}]" -v key="$key" '
@@ -38,10 +39,11 @@ _credentials_get() {
         sub(/[^=]*=[[:space:]]*/, "", v)
         sub(/[[:space:]]+#.*$/, "", v)
         gsub(/[[:space:]]+$/, "", v)
+        gsub(/^"|"$/, "", v)
         print v; exit
       }
     }
-  ' "${CONSOLE_DIR}/.credentials" 2>/dev/null
+  ' "${CONSOLE_DIR}/credentials.conf" 2>/dev/null
 }
 
 # Load credentials for a cluster into env vars for both curl and Packer.
@@ -49,22 +51,23 @@ _credentials_get() {
 _credentials_load() {
   local cluster="$1"
   PROXMOX_CLUSTER="$cluster"
-  PROXMOX_USERNAME="$(_credentials_get "$cluster" "username")"
-  PROXMOX_TOKEN="$(_credentials_get "$cluster" "token")"
+  PROXMOX_USERNAME="$(_credentials_get "$cluster" "packer_username")"
+  PROXMOX_TOKEN="$(_credentials_get "$cluster" "packer_token")"
   [[ -z "$PROXMOX_USERNAME" || -z "$PROXMOX_TOKEN" ]] \
-    && die "Could not read credentials for cluster '${cluster}' from .credentials."
+    && die "Packer service account has not been provisioned for cluster '${cluster}', or its secret is unreadable.\nProvision it via the Setup action: iron_bessy → Setup → Packer service account."
   export PKR_VAR_proxmox_username="$PROXMOX_USERNAME"
   export PKR_VAR_proxmox_token="$PROXMOX_TOKEN"
 }
 
-# Select a cluster from .credentials and load its credentials.
+# Select a cluster from credentials.conf and load its credentials.
 proxmox_load_credentials() {
-  local creds_file="${CONSOLE_DIR}/.credentials"
+  local creds_file="${CONSOLE_DIR}/credentials.conf"
   [[ ! -f "$creds_file" ]] \
-    && die "No .credentials file found. Create ${creds_file} — see .credentials.example for format."
+    && die "No credentials.conf file found.\nService accounts have not been provisioned yet — run iron_bessy → Setup to bootstrap a cluster."
 
   mapfile -t clusters < <(_credentials_list_clusters)
-  [[ ${#clusters[@]} -eq 0 ]] && die "No cluster sections found in .credentials."
+  [[ ${#clusters[@]} -eq 0 ]] \
+    && die "No clusters configured in credentials.conf.\nService accounts have not been provisioned yet — run iron_bessy → Setup to bootstrap a cluster."
 
   if [[ ${#clusters[@]} -eq 1 ]]; then
     _credentials_load "${clusters[0]}"
@@ -145,7 +148,7 @@ proxmox_get_storage() {
   echo "$pools"
 }
 
-# Generic storage selector. Sets the bash variable named $var and saves to .config.
+# Generic storage selector. Sets the bash variable named $var and saves to console.cache.
 # Usage: proxmox_select_storage <node> <content-type> <var> <label>
 proxmox_select_storage() {
   local node="$1" content_type="$2" var="$3" label="$4"
@@ -196,7 +199,7 @@ proxmox_select_storage() {
 proxmox_select_vm_storage()  { proxmox_select_storage "$1" "images" "PROXMOX_VM_STORAGE"  "VM storage";  }
 proxmox_select_iso_storage() { proxmox_select_storage "$1" "iso"    "PROXMOX_ISO_STORAGE" "ISO storage"; }
 
-# Select a network bridge on a node for a specific image. Cached per image in .config.
+# Select a network bridge on a node for a specific image. Cached per image in console.cache.
 proxmox_select_bridge() {
   local node="$1" image="$2"
   local config_key="VM_NETWORK_BRIDGE_${image}"

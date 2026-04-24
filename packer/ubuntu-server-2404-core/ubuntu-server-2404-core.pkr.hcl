@@ -35,9 +35,13 @@ variable "vm_boot_iso_hash" {
 
 locals {
   buildtime = formatdate("YYYY-MM-DD", timestamp())
-  userdata  = templatefile("./ubuntu-server-2404-core/cloudinit/user-data.pkrtpl", {
-    username      = var.template_username
-    password_hash = bcrypt(var.template_password)
+  userdata  = templatefile("./cloudinit/user-data.pkrtpl", {
+    username            = var.template_username
+    password_hash       = bcrypt(var.template_password)
+    ansible_username    = var.ansible_username
+    ansible_ssh_key     = var.ansible_ssh_key
+    breakglass_username = var.breakglass_username
+    breakglass_ssh_key  = var.breakglass_ssh_key
   })
 }
 
@@ -128,7 +132,7 @@ source "proxmox-iso" "ubuntu-2404-core" {
     unmount           = true
     keep_cdrom_device = false
     cd_content = {
-      "meta-data" = file("./ubuntu-server-2404-core/cloudinit/meta-data")
+      "meta-data" = file("./cloudinit/meta-data")
       "user-data" = local.userdata
     }
     cd_label = "cidata"

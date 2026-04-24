@@ -7,11 +7,15 @@ set -euo pipefail
 CONSOLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${CONSOLE_DIR}/.." && pwd)"
 PACKER_DIR="${REPO_ROOT}/packer"
+TOFU_DIR="${REPO_ROOT}/opentofu"
 
 source "${CONSOLE_DIR}/shared/output.sh"
 source "${CONSOLE_DIR}/shared/config.sh"
 source "${CONSOLE_DIR}/shared/proxmox.sh"
 source "${CONSOLE_DIR}/shared/packer.sh"
+source "${CONSOLE_DIR}/shared/tofu.sh"
+source "${CONSOLE_DIR}/shared/privs.sh"
+source "${CONSOLE_DIR}/shared/setup.sh"
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 _usage() {
@@ -54,17 +58,26 @@ main() {
 
   # Register actions here as the pipeline grows.
   local -a actions=(
+    "Setup"
     "Build a VM template"
+    "Provision infrastructure"
     "Quit"
-    # Add new actions here
   )
 
-  PS3=$'\n  Action: '
-  select action in "${actions[@]}"; do
+  while true; do
+    PS3=$'\n  Action: '
+    local action
+    select action in "${actions[@]}"; do
+      [[ -n "$action" ]] && break
+      warn "Invalid selection."
+    done
+    echo ""
+
     case "$action" in
-      "Build a VM template") action_build_template; break ;;
-      "Quit")                info "Goodbye."; echo ""; exit 0 ;;
-      *)                     warn "Invalid selection." ;;
+      "Setup")                    action_setup_menu ;;
+      "Build a VM template")      (action_build_template) || true ;;
+      "Provision infrastructure") (action_provision_infrastructure) || true ;;
+      "Quit")                     info "Goodbye."; echo ""; exit 0 ;;
     esac
   done
 }
