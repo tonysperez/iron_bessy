@@ -174,6 +174,56 @@ variable "firewall_security_groups" {
 # VM Definitions
 # ---------------------------------------------------------------------------
 
+variable "ubuntu_server_2004_core_vms" {
+  description = "Ubuntu Server 20.04 Core VMs to provision. Cloned from the ubuntu-server-2004-core pipeline image."
+  type = map(object({
+    ip_address         = optional(string)
+    ip_gateway         = optional(string)
+    dns_servers        = optional(list(string))
+    dns_domain         = optional(string)
+    vlan               = optional(number)
+    cores              = number
+    memory             = number
+    disk_size          = optional(number, 30)
+    ssd                = optional(bool, false)
+    discard            = optional(bool, false)
+    fw_security_group  = optional(string)
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for name, vm in var.ubuntu_server_2004_core_vms :
+      vm.vlan == null || (vm.vlan >= 1 && vm.vlan <= 4094)
+    ])
+    error_message = "Each VM's vlan must be between 1 and 4094, or null."
+  }
+
+  validation {
+    condition = alltrue([
+      for name, vm in var.ubuntu_server_2004_core_vms :
+      vm.ip_address == null || can(cidrhost(vm.ip_address, 0))
+    ])
+    error_message = "Each VM's ip_address must be a valid IPv4 CIDR (e.g. 192.168.1.10/24), or null for DHCP."
+  }
+
+  validation {
+    condition = alltrue([
+      for name, vm in var.ubuntu_server_2004_core_vms :
+      vm.ip_gateway == null || can(cidrhost("${vm.ip_gateway}/32", 0))
+    ])
+    error_message = "Each VM's ip_gateway must be a valid IPv4 address, or null."
+  }
+
+  validation {
+    condition = alltrue([
+      for name, vm in var.ubuntu_server_2004_core_vms :
+      vm.dns_servers == null || alltrue([for s in vm.dns_servers : can(cidrhost("${s}/32", 0))])
+    ])
+    error_message = "Each VM's dns_servers entries must be valid IPv4 addresses."
+  }
+}
+
 variable "ubuntu_server_2404_core_vms" {
   description = "Ubuntu Server 24.04 Core VMs to provision. Cloned from the ubuntu-server-2404-core pipeline image."
   type = map(object({

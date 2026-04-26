@@ -1,0 +1,63 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US
+  keyboard:
+    layout: us
+  identity:
+    hostname: template-ubuntu-server-2004-core
+    username: ${username}
+    password: "${password_hash}"
+  ssh:
+    install-server: true
+    allow-pw: true
+    ssh_quiet_keygen: true
+  network:
+    network:
+      version: 2
+      ethernets:
+        any:
+          match:
+            name: en*
+          dhcp4: true
+          dhcp6: false
+  packages:
+    - auditd
+    - sudo
+    - qemu-guest-agent
+    - openssh-server
+    - cloud-init
+    - python3
+    - python3-pip
+    - curl
+  storage:
+    layout:
+      name: direct
+    swap:
+      size: 0
+  user-data:
+    package_upgrade: true
+    timezone: UTC
+    disable_root: true
+    users:
+      - name: ${ansible_username}
+        gecos: Ansible Service Account
+        shell: /bin/bash
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: true
+        ssh_authorized_keys:
+          - ${ansible_ssh_key}
+      - name: ${breakglass_username}
+        gecos: Break-glass Emergency Account
+        shell: /bin/bash
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: true
+        ssh_authorized_keys:
+          - ${breakglass_ssh_key}
+  late-commands:
+    # Grant passwordless sudo to build user (Packer needs this).
+    # Post-build, this account is locked and should be removed by downstream provisioning.
+    - echo '${username} ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/${username}
+    - chmod 440 /target/etc/sudoers.d/${username}
+  # Force non-interactive installation
+  interactive-sections: []
