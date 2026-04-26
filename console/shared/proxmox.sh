@@ -256,7 +256,11 @@ proxmox_select_bridge() {
 }
 
 # Select a Proxmox resource pool and set PROXMOX_VM_POOL (empty string = no pool).
+# Optional first argument: cache key to use (default: PROXMOX_VM_POOL).
+# Using separate cache keys for Packer (PACKER_VM_POOL) and Tofu (TOFU_VM_POOL)
+# prevents a "None" selection in one tool from poisoning the other's cached value.
 proxmox_select_pool() {
+  local cache_key="${1:-PROXMOX_VM_POOL}"
   info "Querying resource pools..."
   local response
   response=$(curl -sf -k \
@@ -268,7 +272,7 @@ proxmox_select_pool() {
 
   # Saved value is "None" (sentinel) or a pool name. Absent = never been set.
   local saved
-  saved="$(config_get PROXMOX_VM_POOL)"
+  saved="$(config_get "$cache_key")"
 
   if [[ -n "$saved" ]]; then
     local match=1
@@ -303,7 +307,7 @@ proxmox_select_pool() {
   [[ "$selected" == "None" ]] && PROXMOX_VM_POOL="" || PROXMOX_VM_POOL="$selected"
   success "Using resource pool: ${selected}"
   echo ""
-  config_set PROXMOX_VM_POOL "$selected"
+  config_set "$cache_key" "$selected"
 }
 
 # Check if a VMID is already in use. If it is:

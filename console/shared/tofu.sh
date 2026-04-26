@@ -452,7 +452,7 @@ action_provision_infrastructure() {
   proxmox_select_node
   proxmox_select_vm_storage  "$PROXMOX_NODE"
   proxmox_select_bridge      "$PROXMOX_NODE" "tofu"
-  proxmox_select_pool
+  proxmox_select_pool "TOFU_VM_POOL"
 
   local -a _BASE_VAR_ARGS=(
     -var "proxmox_url=${PROXMOX_URL}"

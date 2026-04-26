@@ -176,7 +176,7 @@ action_build_template() {
   proxmox_select_vm_storage  "$PROXMOX_NODE"
   proxmox_select_iso_storage "$PROXMOX_NODE"
   proxmox_select_bridge      "$PROXMOX_NODE" "$image"
-  proxmox_select_pool
+  proxmox_select_pool "PACKER_VM_POOL"
   [[ -z "${PROXMOX_VM_POOL}" ]] && die "A resource pool is required for Packer builds.\nVM.Allocate is scoped to the pool ACL — select a pool and re-run."
 
   # ── Verify ISO exists on selected node ──────────────────────────────────────
